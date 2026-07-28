@@ -216,3 +216,20 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+
+# ------------------------------------------------------------------------------
+# Arquivos locais e temporarios do Automador SIGAA
+# ------------------------------------------------------------------------------
+# Checkpoint de erro/progresso do loop
+checkpoint.json
+elementos_sigaa.json
+textos_padrao.json
+
+# Planilhas com dados locais
+*.xlsx
+*.xls
+*.csv
+
+# Pasta de configuracao e cache do Streamlit
+.streamlit/
