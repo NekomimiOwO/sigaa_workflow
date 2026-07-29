@@ -474,16 +474,17 @@ with tab1:
 
     st.divider()
 
+    # --- SEÇÃO DE ADICIONAR NOVOS PASSOS (COM KEYS FIXAS PARA EVITAR CONGELAMENTO) ---
     with st.expander("➕ Adicionar Novo Passo ao Workflow", expanded=True):
         catalogo = carregar_json_local(ARQUIVO_CATALOGO)
         
         col_pos1, col_pos2 = st.columns([2, 2])
         with col_pos1:
-            tipo_passo = st.selectbox("Tipo de Ação:", ["Clicar", "Preencher", "Navegar", "Validar Texto", "🔁 Iniciar Loop", "🔚 Fim de Loop"])
+            tipo_passo = st.selectbox("Tipo de Ação:", ["Clicar", "Preencher", "Navegar", "Validar Texto", "🔁 Iniciar Loop", "🔚 Fim de Loop"], key="add_tipo_passo")
         with col_pos2:
             total_p = len(st.session_state.steps)
             opcoes_posicao = ["No final do workflow"] + [f"Antes do Passo {i+1}" for i in range(total_p)] + [f"Depois do Passo {i+1}" for i in range(total_p)]
-            posicao_escolhida = st.selectbox("Posição de Inserção:", opcoes_posicao)
+            posicao_escolhida = st.selectbox("Posição de Inserção:", opcoes_posicao, key="add_posicao_escolhida")
 
         def calcular_indice_insercao():
             if posicao_escolhida == "No final do workflow" or total_p == 0:
@@ -497,7 +498,7 @@ with tab1:
             return len(st.session_state.steps)
 
         if tipo_passo in ["Clicar", "Preencher"]:
-            origem_seletor = st.radio("Origem do Elemento:", ["Usar Catálogo Mapeado (Recomendado)", "Digitar Seletor Manualmente"], horizontal=True)
+            origem_seletor = st.radio("Origem do Elemento:", ["Usar Catálogo Mapeado (Recomendado)", "Digitar Seletor Manualmente"], horizontal=True, key="add_origem_seletor")
             
             target_add = ""
             by_add = "xpath"
@@ -507,14 +508,14 @@ with tab1:
                 col_h1, col_h2, col_h3 = st.columns(3)
                 with col_h1:
                     modulos_disponiveis = list(catalogo.keys())
-                    mod_sel = st.selectbox("1. Módulo Hierárquico:", modulos_disponiveis)
+                    mod_sel = st.selectbox("1. Módulo Hierárquico:", modulos_disponiveis, key="add_mod_sel")
                 with col_h2:
                     telas_disponiveis = list(catalogo.get(mod_sel, {}).keys())
-                    tela_sel = st.selectbox("2. Tela / Seção:", telas_disponiveis)
+                    tela_sel = st.selectbox("2. Tela / Seção:", telas_disponiveis, key="add_tela_sel")
                 with col_h3:
                     elementos_brutos = catalogo.get(mod_sel, {}).get(tela_sel, {})
                     elementos_ativos = {k: v for k, v in elementos_brutos.items() if v.get("ativo", True)}
-                    elem_sel = st.selectbox("3. Elemento:", list(elementos_ativos.keys()))
+                    elem_sel = st.selectbox("3. Elemento:", list(elementos_ativos.keys()), key="add_elem_sel")
 
                 if elem_sel in elementos_ativos:
                     dados_elem = elementos_ativos[elem_sel]
@@ -524,17 +525,17 @@ with tab1:
                     st.caption(f"🎯 Seletor extraído do catálogo: `{target_add}` (Tipo: `{by_add}`)")
 
             else:
-                target_add = st.text_input("Seletor do Elemento (ID ou XPath):", value="formulario:matriculaDiscente")
+                target_add = st.text_input("Seletor do Elemento (ID ou XPath):", value="formulario:matriculaDiscente", key="add_target_manual")
                 by_add = "xpath"
                 nome_exibicao = target_add
 
             col_p1, col_p2, col_p3 = st.columns(3)
             with col_p1:
-                tempo_pausa_add = st.number_input("Pausa após a ação (s):", min_value=0.0, value=0.5, step=0.5)
+                tempo_pausa_add = st.number_input("Pausa após a ação (s):", min_value=0.0, value=0.5, step=0.5, key="add_tempo_pausa")
             with col_p2:
-                retentativas_add = st.number_input("Re-tentativas:", min_value=1, value=3, step=1)
+                retentativas_add = st.number_input("Re-tentativas:", min_value=1, value=3, step=1, key="add_retentativas")
             with col_p3:
-                intervalo_add = st.number_input("Intervalo re-tentativas (s):", min_value=0.5, value=0.5, step=0.5)
+                intervalo_add = st.number_input("Intervalo re-tentativas (s):", min_value=0.5, value=0.5, step=0.5, key="add_intervalo")
 
             valor_add = ""
             usar_loop_val = False
@@ -542,19 +543,19 @@ with tab1:
             coluna_ref = ""
 
             if tipo_passo == "Preencher":
-                usar_loop_val = st.checkbox("Usar valor de Planilha do Loop", value=True)
+                usar_loop_val = st.checkbox("Usar valor de Planilha do Loop", value=True, key="add_usar_loop_val")
                 if usar_loop_val:
                     if st.session_state.planilhas_disponiveis:
                         col_pl1, col_pl2 = st.columns(2)
                         with col_pl1:
-                            planilha_ref = st.selectbox("Selecione a Planilha:", list(st.session_state.planilhas_disponiveis.keys()))
+                            planilha_ref = st.selectbox("Selecione a Planilha:", list(st.session_state.planilhas_disponiveis.keys()), key="add_planilha_ref")
                         with col_pl2:
                             colunas_disp = list(st.session_state.planilhas_disponiveis[planilha_ref].keys())
-                            coluna_ref = st.selectbox("Selecione a Coluna:", colunas_disp)
+                            coluna_ref = st.selectbox("Selecione a Coluna:", colunas_disp, key="add_coluna_ref")
                     else:
                         st.warning("Adicione um '🔁 Iniciar Loop' com planilhas para habilitar a seleção de colunas.")
                 else:
-                    valor_add = st.text_input("Valor fixo a preencher:")
+                    valor_add = st.text_input("Valor fixo a preencher:", key="add_valor_fixo")
 
             if st.button(f"➕ Adicionar {tipo_passo} ao Workflow", type="primary"):
                 if target_add:
@@ -581,9 +582,9 @@ with tab1:
         elif tipo_passo == "Navegar":
             col_nav1, col_nav2 = st.columns([3, 1])
             with col_nav1:
-                url_nav_add = st.text_input("URL para onde navegar:", value="")
+                url_nav_add = st.text_input("URL para onde navegar:", value="", key="add_url_nav")
             with col_nav2:
-                tempo_pausa_add = st.number_input("Pausa após navegar (s):", min_value=0.0, value=1.0, step=0.5)
+                tempo_pausa_add = st.number_input("Pausa após navegar (s):", min_value=0.0, value=1.0, step=0.5, key="add_pausa_nav")
             
             if st.button("➕ Adicionar Navegação ao Workflow", type="primary"):
                 if url_nav_add:
@@ -602,17 +603,18 @@ with tab1:
             if opcoes:
                 col_v1, col_v2, col_v3 = st.columns(3)
                 with col_v1:
-                    txt_sel = st.selectbox("Escolha o Texto Padrão de Validação:", opcoes)
+                    txt_sel = st.selectbox("Escolha o Texto Padrão de Validação:", opcoes, key="add_txt_sel")
                     condicao_val = st.selectbox(
                         "Regra de Interrupção:", 
-                        ["Parar se NÃO encontrar na tela", "Parar se ENCONTRAR na tela (Detector de Erro)"]
+                        ["Parar se NÃO encontrar na tela", "Parar se ENCONTRAR na tela (Detector de Erro)"],
+                        key="add_condicao_val"
                     )
                 with col_v2:
-                    timeout_val = st.number_input("Timeout busca (s):", min_value=1, value=5)
-                    tempo_pausa_add = st.number_input("Pausa pós-validação (s):", min_value=0.0, value=0.5, step=0.5)
+                    timeout_val = st.number_input("Timeout busca (s):", min_value=1, value=5, key="add_timeout_val")
+                    tempo_pausa_add = st.number_input("Pausa pós-validação (s):", min_value=0.0, value=0.5, step=0.5, key="add_pausa_val")
                 with col_v3:
-                    retentativas_add = st.number_input("Re-tentativas do texto:", min_value=1, value=3, step=1)
-                    intervalo_add = st.number_input("Intervalo entre buscas (s):", min_value=0.5, value=0.5, step=0.5)
+                    retentativas_add = st.number_input("Re-tentativas do texto:", min_value=1, value=3, step=1, key="add_retent_val")
+                    intervalo_add = st.number_input("Intervalo entre buscas (s):", min_value=0.5, value=0.5, step=0.5, key="add_interv_val")
                 
                 if st.button("Adicionar Validação"):
                     idx_ins = calcular_indice_insercao()
@@ -672,8 +674,17 @@ with tab1:
         if acao == "Iniciar Loop":
             planilhas_no_step = step.get("planilhas", {})
             m_lin = step.get("max_linhas", 0)
+            nomes_planilhas_loop = list(planilhas_no_step.keys())
             
-            col_lk1, col_lk2 = st.columns([5, 1])
+            # Verifica se algum outro passo do workflow depende das planilhas deste loop
+            passos_dependentes = [
+                i + 1 for i, s in enumerate(st.session_state.steps)
+                if s.get("acao") == "Preencher" 
+                and s.get("usar_loop", True) 
+                and s.get("planilha_ref") in nomes_planilhas_loop
+            ]
+            
+            col_lk1, col_lk2, col_lk3 = st.columns([4, 1.2, 0.8])
             with col_lk1:
                 st.warning(f"🔁 **Passo {idx + 1}: Iniciar Loop** ({len(planilhas_no_step)} planilha(s) vinculada(s) - {m_lin} linhas)")
             with col_lk2:
@@ -685,6 +696,18 @@ with tab1:
                 with col_btn2:
                     if idx < len(st.session_state.steps) - 1 and st.button("⬇️", key=f"down_{idx}"):
                         st.session_state.steps[idx], st.session_state.steps[idx+1] = st.session_state.steps[idx+1], st.session_state.steps[idx]
+                        st.rerun()
+            with col_lk3:
+                if st.button("🗑️ Excluir", key=f"del_loop_{idx}"):
+                    if passos_dependentes:
+                        st.error(f"⛔ Altere ou exclua primeiro o(s) passo(s) dependente(s): {passos_dependentes}")
+                    else:
+                        st.session_state.steps.pop(idx)
+                        # Recalcula as planilhas disponíveis no estado global
+                        st.session_state.planilhas_disponiveis = {}
+                        for s in st.session_state.steps:
+                            if s.get("acao") == "Iniciar Loop" and "planilhas" in s:
+                                st.session_state.planilhas_disponiveis.update(s["planilhas"])
                         st.rerun()
             
             if not planilhas_no_step:
@@ -708,7 +731,7 @@ with tab1:
                     st.rerun()
 
         elif acao == "Fim de Loop":
-            col_lk1, col_lk2 = st.columns([5, 1])
+            col_lk1, col_lk2, col_lk3 = st.columns([4, 1.2, 0.8])
             with col_lk1:
                 st.warning(f"🔚 **Passo {idx + 1}: Fim de Loop**")
             with col_lk2:
@@ -721,6 +744,10 @@ with tab1:
                     if idx < len(st.session_state.steps) - 1 and st.button("⬇️", key=f"down_{idx}"):
                         st.session_state.steps[idx], st.session_state.steps[idx+1] = st.session_state.steps[idx+1], st.session_state.steps[idx]
                         st.rerun()
+            with col_lk3:
+                if st.button("🗑️ Excluir", key=f"del_end_loop_{idx}"):
+                    st.session_state.steps.pop(idx)
+                    st.rerun()
 
         else:
             rotulo_card = step.get('rotulo') or step.get('seletor_target') or step.get('detalhe', '')
@@ -747,8 +774,24 @@ with tab1:
                     elif acao == "Preencher":
                         step["seletor_target"] = st.text_input(f"Seletor", value=step.get("seletor_target", ""), key=f"sel_{idx}")
                         step["usar_loop"] = st.checkbox("Usar valor de Planilha do Loop", value=step.get("usar_loop", True), key=f"chk_loop_{idx}")
+                        
                         if step["usar_loop"]:
-                            st.caption(f"📊 Planilha Alvo: `{step.get('planilha_ref')}` | Coluna: `{step.get('coluna_ref')}`")
+                            if st.session_state.planilhas_disponiveis:
+                                col_pl1, col_pl2 = st.columns(2)
+                                planilhas_list = list(st.session_state.planilhas_disponiveis.keys())
+                                
+                                # Recupera o índice salvo ou usa o primeiro disponível
+                                p_index = planilhas_list.index(step.get("planilha_ref")) if step.get("planilha_ref") in planilhas_list else 0
+                                
+                                with col_pl1:
+                                    step["planilha_ref"] = st.selectbox("Planilha Alvo:", planilhas_list, index=p_index, key=f"plan_ref_{idx}")
+                                
+                                with col_pl2:
+                                    colunas_list = list(st.session_state.planilhas_disponiveis[step["planilha_ref"]].keys())
+                                    c_index = colunas_list.index(step.get("coluna_ref")) if step.get("coluna_ref") in colunas_list else 0
+                                    step["coluna_ref"] = st.selectbox("Coluna Alvo:", colunas_list, index=c_index, key=f"col_ref_{idx}")
+                            else:
+                                st.warning("⚠️ Adicione ou re-vincule planilhas no passo 'Iniciar Loop' para selecionar as colunas.")
                         else:
                             step["valor"] = st.text_input(f"Valor Fixo", value=step.get("valor", ""), key=f"val_{idx}")
                     elif acao == "Clicar":
