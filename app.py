@@ -64,7 +64,7 @@ def salvar_json_local(caminho, dados):
         json.dump(dados, f, indent=2, ensure_ascii=False)
 
 def salvar_elemento_no_catalogo(modulo_pai, nome_tela, mapa_elementos):
-    """Atualiza o catálogo respeitando elementos desativados (falsos positivos)."""
+    """Atualiza o catálogo respeitando elementos desativados e preservando nomes originais."""
     dados = carregar_json_local(ARQUIVO_CATALOGO)
     
     if modulo_pai not in dados:
@@ -80,6 +80,8 @@ def salvar_elemento_no_catalogo(modulo_pai, nome_tela, mapa_elementos):
             continue
         
         dados_novo_elemento["ativo"] = True
+        # Garante a gravação do nome original para permitir restaurações futuras
+        dados_novo_elemento["nome_original"] = elemento_existente.get("nome_original", chave)
         dados[modulo_pai][nome_tela][chave] = dados_novo_elemento
         
     salvar_json_local(ARQUIVO_CATALOGO, dados)
@@ -116,16 +118,14 @@ def parsear_seletor(sel_str):
     return By.CSS_SELECTOR, sel_str.replace(":", "\\:")
 
 def encontrar_elemento_com_fallback(driver, wait, passo, retentativas=3, intervalo=1.0):
-    """Encontra elementos de forma ultra-rápida sem travar o script por 10 segundos."""
+    """Encontra elementos de forma rápida sem travar o script."""
     target_raw = passo.get("seletor_target", "").strip()
     lista_seletores = []
 
     if target_raw:
-        # Coloca o seletor principal e verificado em PRIMEIRO LUGAR na lista
         by_type, target = parsear_seletor(target_raw)
         lista_seletores.append((by_type, target))
 
-        # Apenas gera fallback de ID se a string NÃO for um XPath
         if not (target_raw.startswith("//") or target_raw.startswith("(") or target_raw.startswith("xpath")):
             clean_id = target_raw.lstrip("#").replace("\\:", ":")
             if (By.ID, clean_id) not in lista_seletores:
@@ -137,7 +137,6 @@ def encontrar_elemento_com_fallback(driver, wait, passo, retentativas=3, interva
 
     ultimo_erro = None
     for tentativa in range(retentativas):
-        # 1. Busca instantânea (sem timeout longo) em todos os seletores válidos
         for by_type, target in lista_seletores:
             try:
                 elems = driver.find_elements(by_type, target)
@@ -150,7 +149,6 @@ def encontrar_elemento_com_fallback(driver, wait, passo, retentativas=3, interva
                 ultimo_erro = e
                 continue
 
-        # 2. Se a página ainda estiver carregando, faz uma espera curta (máximo 1 segundo)
         if lista_seletores:
             by_type, target = lista_seletores[0]
             try:
@@ -306,25 +304,29 @@ def mapear_tela_atual_para_json(driver, nome_da_tela):
                 if tag_name == "input" and tipo_attr in ["submit", "button"]:
                     mapa_tela[nome_chave] = {
                         "by": "xpath",
-                        "target": f"//input[@value='{texto_visivel}']"
+                        "target": f"//input[@value='{texto_visivel}']",
+                        "nome_original": nome_chave
                     }
                 else:
                     mapa_tela[nome_chave] = {
                         "by": "xpath",
-                        "target": f"//*[contains(text(), '{texto_visivel}')]"
+                        "target": f"//*[contains(text(), '{texto_visivel}')]",
+                        "nome_original": nome_chave
                     }
                     
             elif id_attr and not id_attr.startswith("j_id"):
                 nome_chave = id_attr.split(":")[-1]
                 mapa_tela[nome_chave] = {
                     "by": "xpath",
-                    "target": f"//*[@id='{id_attr}']"
+                    "target": f"//*[@id='{id_attr}']",
+                    "nome_original": nome_chave
                 }
             elif title_attr and title_attr.lower() not in ruidos_ignorar:
                 nome_chave = title_attr.lower().replace(" ", "_")
                 mapa_tela[nome_chave] = {
                     "by": "xpath",
-                    "target": f"//*[@title='{title_attr}']"
+                    "target": f"//*[@title='{title_attr}']",
+                    "nome_original": nome_chave
                 }
         except Exception:
             continue
@@ -397,12 +399,12 @@ driver_status = obter_driver_ativo()
 
 if driver_status:
     st.sidebar.success("🟢 Navegador Aberto e Conectado")
-    if st.sidebar.button("❌ Fechar Navegador", use_container_width=True):
+    if st.sidebar.button("❌ Fechar Navegador", width="stretch"):
         fechar_navegador_universal()
         st.rerun()
 else:
     st.sidebar.warning("🔴 Navegador Desconectado")
-    if st.sidebar.button("🌐 Abrir / Logar no Chrome", use_container_width=True):
+    if st.sidebar.button("🌐 Abrir / Logar no Chrome", width="stretch"):
         driver = iniciar_navegador_universal()
         try:
             aguardar_login_manual(driver, URL_LOGIN_CONFIG)
@@ -459,13 +461,13 @@ with tab1:
                 data=json_export,
                 file_name="workflow_sigaa.json",
                 mime="application/json",
-                use_container_width=True
+                width="stretch"
             )
 
     with col_exp3:
         st.write("")
         st.write("")
-        if st.button("🗑️ Limpar Passos", use_container_width=True):
+        if st.button("🗑️ Limpar Passos", width="stretch"):
             st.session_state.steps = []
             st.session_state.planilhas_disponiveis = {}
             st.rerun()
@@ -511,7 +513,6 @@ with tab1:
                     tela_sel = st.selectbox("2. Tela / Seção:", telas_disponiveis)
                 with col_h3:
                     elementos_brutos = catalogo.get(mod_sel, {}).get(tela_sel, {})
-                    # Filtra apenas elementos que possuem a propriedade ativo == True
                     elementos_ativos = {k: v for k, v in elementos_brutos.items() if v.get("ativo", True)}
                     elem_sel = st.selectbox("3. Elemento:", list(elementos_ativos.keys()))
 
@@ -602,6 +603,10 @@ with tab1:
                 col_v1, col_v2, col_v3 = st.columns(3)
                 with col_v1:
                     txt_sel = st.selectbox("Escolha o Texto Padrão de Validação:", opcoes)
+                    condicao_val = st.selectbox(
+                        "Regra de Interrupção:", 
+                        ["Parar se NÃO encontrar na tela", "Parar se ENCONTRAR na tela (Detector de Erro)"]
+                    )
                 with col_v2:
                     timeout_val = st.number_input("Timeout busca (s):", min_value=1, value=5)
                     tempo_pausa_add = st.number_input("Pausa pós-validação (s):", min_value=0.0, value=0.5, step=0.5)
@@ -615,6 +620,7 @@ with tab1:
                         "acao": "Validar Texto",
                         "texto": textos_cadastrados[txt_sel],
                         "rotulo": txt_sel,
+                        "condicao": condicao_val,
                         "timeout": timeout_val,
                         "tempo_espera": tempo_pausa_add,
                         "retentativas": retentativas_add,
@@ -749,6 +755,7 @@ with tab1:
                         step["seletor_target"] = st.text_input(f"Seletor", value=step.get("seletor_target", ""), key=f"sel_{idx}")
                     elif acao == "Validar Texto":
                         st.write(f"Texto Esperado: `{step.get('texto')}`")
+                        st.caption(f"Regra: `{step.get('condicao', 'Parar se NÃO encontrar na tela')}`")
                         step["timeout"] = st.number_input(f"Timeout Busca (s)", value=step.get("timeout", 5), key=f"tout_{idx}")
 
                 with col3:
@@ -760,7 +767,7 @@ with tab1:
 
     st.subheader("🚀 Execução da Automação")
 
-    if st.button("🚀 Executar Workflow no Chrome", type="primary", use_container_width=True):
+    if st.button("🚀 Executar Workflow no Chrome", type="primary", width="stretch"):
         if not st.session_state.steps:
             st.error("Adicione passos ao workflow antes de executar.")
         else:
@@ -844,13 +851,18 @@ with tab1:
                             interrompido = True
 
                     elif acao == "Validar Texto" and not step.get("no_loop", False):
-                        st.write(f"▶️ Verificando texto: '{step['texto']}'")
+                        condicao_regra = step.get("condicao", "Parar se NÃO encontrar na tela")
+                        st.write(f"▶️ Verificando texto: '{step['texto']}' (Regra: {condicao_regra})")
                         encontrou = validar_texto_na_tela(driver, step['texto'], timeout=step.get('timeout', 5), retentativas=n_retentativas, intervalo=t_intervalo)
-                        if not encontrou:
-                            st.error(f"⛔ **Interrupção no Passo {step_idx + 1}:** Texto '{step['texto']}' não encontrado após {n_retentativas} tentativa(s).")
+                        
+                        if "ENCONTRAR" in condicao_regra and encontrou:
+                            st.error(f"⛔ **Interrupção no Passo {step_idx + 1}:** Texto de alerta/erro '{step['texto']}' foi localizado na tela.")
+                            interrompido = True
+                        elif "NÃO encontrar" in condicao_regra and not encontrou:
+                            st.error(f"⛔ **Interrupção no Passo {step_idx + 1}:** Texto esperado '{step['texto']}' não foi localizado na tela.")
                             interrompido = True
                         else:
-                            st.success(f"✅ Texto localizado na tela: '{step['texto']}'")
+                            st.success(f"✅ Validação de texto concluída com sucesso: '{step['texto']}'")
                             time.sleep(tempo_pausa)
                             step_idx += 1
 
@@ -932,15 +944,23 @@ with tab1:
                                     time.sleep(inner_pausa)
 
                                 elif inner_acao == "Validar Texto":
+                                    condicao_regra = inner_step.get("condicao", "Parar se NÃO encontrar na tela")
                                     encontrou = validar_texto_na_tela(driver, inner_step["texto"], timeout=inner_step.get("timeout", 5), retentativas=inner_ret, intervalo=inner_inter)
-                                    if not encontrou:
-                                        msg_txt = f"Texto '{inner_step['texto']}' não encontrado na tela."
+                                    
+                                    if "ENCONTRAR" in condicao_regra and encontrou:
+                                        msg_txt = f"Texto de alerta/erro '{inner_step['texto']}' foi localizado na tela."
+                                        registrar_falha_checkpoint(nome_key_checkpoint, i_item, inner_idx, inner_acao, rotulo_p, valor_atual_acao, planilha_atual, coluna_atual, msg_txt)
+                                        st.error(f"⛔ **Interrupção no Passo {inner_idx + 1} (Linha {i_item + 1}):** {msg_txt}")
+                                        interrompido = True
+                                        break
+                                    elif "NÃO encontrar" in condicao_regra and not encontrou:
+                                        msg_txt = f"Texto esperado '{inner_step['texto']}' não foi localizado na tela."
                                         registrar_falha_checkpoint(nome_key_checkpoint, i_item, inner_idx, inner_acao, rotulo_p, valor_atual_acao, planilha_atual, coluna_atual, msg_txt)
                                         st.error(f"⛔ **Interrupção no Passo {inner_idx + 1} (Linha {i_item + 1}):** {msg_txt}")
                                         interrompido = True
                                         break
                                     else:
-                                        st.success(f"✅ Texto localizado na linha {i_item + 1}: '{inner_step['texto']}'")
+                                        st.success(f"✅ Validação de texto concluída na linha {i_item + 1}: '{inner_step['texto']}'")
 
                                     time.sleep(inner_pausa)
 
@@ -990,7 +1010,7 @@ with tab2:
 
     col_b1, col_b2, col_b3 = st.columns([2, 3, 2])
     with col_b1:
-        if st.button("🌐 1. Abrir Chrome / Logar", use_container_width=True):
+        if st.button("🌐 1. Abrir Chrome / Logar", width="stretch"):
             driver = iniciar_navegador_universal()
             try:
                 aguardar_login_manual(driver, URL_LOGIN_CONFIG)
@@ -999,7 +1019,7 @@ with tab2:
                 st.error(f"Erro: {e}")
 
     with col_b2:
-        if st.button("📸 2. Capturar Tela Atual", type="primary", use_container_width=True):
+        if st.button("📸 2. Capturar Tela Atual", type="primary", width="stretch"):
             driver = obter_driver_ativo()
             if not driver:
                 st.error("Abra o navegador primeiro pelo botão '1. Abrir Chrome / Logar'.")
@@ -1008,14 +1028,13 @@ with tab2:
                     mapa_elem = mapear_tela_atual_para_json(driver, nome_tela_input)[nome_tela_input]
                     cat_atualizado = salvar_elemento_no_catalogo(modulo_pai_final, nome_tela_input, mapa_elem)
                     
-                    # MENSAGEM VISÍVEL FIXADA (Sem o st.rerun que apagava a confirmação)
                     st.success(f"✅ Tela '{nome_tela_input}' salva com sucesso no módulo '{modulo_pai_final}'!")
                     st.json(cat_atualizado[modulo_pai_final][nome_tela_input])
                 except Exception as e:
                     st.error(f"Erro ao capturar: {e}")
 
     with col_b3:
-        if st.button("❌ 3. Fechar Navegador", use_container_width=True):
+        if st.button("❌ 3. Fechar Navegador", width="stretch"):
             fechar_navegador_universal()
             st.info("Navegador fechado.")
 
@@ -1045,7 +1064,7 @@ with tab3:
 
 
 # ------------------------------------------------------------------------------
-# ABA 4: GERENCIADOR DE CATÁLOGO (TABELA COM CHECKBOX)
+# ABA 4: GERENCIADOR DE CATÁLOGO (TABELA COM CHECKBOX E RESTAURAÇÃO DE NOMES)
 # ------------------------------------------------------------------------------
 with tab4:
     st.subheader("🗂️ Gerenciador de Catálogo Mapeado")
@@ -1070,13 +1089,15 @@ with tab4:
                 
                 st.divider()
                 st.markdown(f"### 📋 Gerenciar Elementos da Tela: `{tela_gerencia}`")
-                st.caption("Desmarque a caixa 'Ativo' para definir o elemento como falso positivo (ele sumirá da seleção no editor e não será re-mapeado).")
+                st.caption("• Desmarque a caixa 'Ativo' para ocultar elementos desnecessários (eles não aparecerão no editor e não serão sobrescritos).\n• Se apagar o 'Identificador' e salvar, o nome original será restaurado automaticamente.")
                 
                 # Monta a estrutura da tabela
                 lista_dados = []
                 for k, v in dict_elementos.items():
+                    nome_orig = v.get("nome_original", k)
                     lista_dados.append({
                         "Identificador": k,
+                        "Nome Original": nome_orig,
                         "Ativo": v.get("ativo", True),
                         "Tipo": v.get("by", "xpath"),
                         "Alvo (Seletor)": v.get("target", "")
@@ -1084,35 +1105,61 @@ with tab4:
                 
                 df_elementos = pd.DataFrame(lista_dados)
                 
-                # Exibe a tabela interativa com caixas de seleção
+                # Exibe a tabela interativa
                 df_editado = st.data_editor(
                     df_elementos,
                     column_config={
                         "Ativo": st.column_config.CheckboxColumn("Ativo", help="Desmarque para desativar/ocultar no editor"),
-                        "Identificador": st.column_config.TextColumn("Identificador (Nome)"),
+                        "Identificador": st.column_config.TextColumn("Identificador (Nome Customizado)"),
+                        "Nome Original": st.column_config.TextColumn("Nome Original Mapeado", disabled=True),
                         "Tipo": st.column_config.TextColumn("Tipo", disabled=True),
                         "Alvo (Seletor)": st.column_config.TextColumn("Alvo (Seletor)", disabled=True),
                     },
-                    disabled=["Tipo", "Alvo (Seletor)"],
+                    disabled=["Tipo", "Alvo (Seletor)", "Nome Original"],
                     hide_index=True,
-                    use_container_width=True,
+                    width="stretch",
                     key=f"editor_{mod_gerencia}_{tela_gerencia}"
                 )
                 
-                if st.button("💾 Salvar Alterações no Catálogo", type="primary", use_container_width=True):
-                    novo_dict_tela = {}
-                    for _, row in df_editado.iterrows():
-                        nome_key = str(row["Identificador"]).strip()
-                        if nome_key:
-                            novo_dict_tela[nome_key] = {
+                col_sav1, col_sav2 = st.columns(2)
+                
+                with col_sav1:
+                    if st.button("💾 Salvar Alterações na Tela", type="primary", width="stretch"):
+                        novo_dict_tela = {}
+                        for _, row in df_editado.iterrows():
+                            nome_digitado = str(row["Identificador"]).strip()
+                            nome_orig = str(row["Nome Original"]).strip()
+                            
+                            # Se o usuário deixou o campo vazio, volta automaticamente para o Nome Original!
+                            nome_final = nome_digitado if nome_digitado else nome_orig
+                            
+                            novo_dict_tela[nome_final] = {
                                 "by": str(row["Tipo"]),
                                 "target": str(row["Alvo (Seletor)"]),
-                                "ativo": bool(row["Ativo"])
+                                "ativo": bool(row["Ativo"]),
+                                "nome_original": nome_orig
                             }
-                    
-                    catalogo_gerencia[mod_gerencia][tela_gerencia] = novo_dict_tela
-                    salvar_json_local(ARQUIVO_CATALOGO, catalogo_gerencia)
-                    st.success("✅ Alterações salvas com sucesso!")
-                    st.rerun()
+                        
+                        catalogo_gerencia[mod_gerencia][tela_gerencia] = novo_dict_tela
+                        salvar_json_local(ARQUIVO_CATALOGO, catalogo_gerencia)
+                        st.success("✅ Alterações salvas com sucesso!")
+                        st.rerun()
+
+                with col_sav2:
+                    if st.button("🔄 Restaurar Todos para Nomes Originais", width="stretch"):
+                        novo_dict_tela = {}
+                        for _, row in df_editado.iterrows():
+                            nome_orig = str(row["Nome Original"]).strip()
+                            novo_dict_tela[nome_orig] = {
+                                "by": str(row["Tipo"]),
+                                "target": str(row["Alvo (Seletor)"]),
+                                "ativo": bool(row["Ativo"]),
+                                "nome_original": nome_orig
+                            }
+                        
+                        catalogo_gerencia[mod_gerencia][tela_gerencia] = novo_dict_tela
+                        salvar_json_local(ARQUIVO_CATALOGO, catalogo_gerencia)
+                        st.success("✅ Todos os nomes desta tela foram restaurados para o padrão original!")
+                        st.rerun()
     else:
         st.info("O catálogo atual está vazio. Use a Aba 2 para mapear novos elementos.")
