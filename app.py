@@ -286,10 +286,10 @@ def validar_texto_na_tela(driver, texto_esperado, timeout=5, retentativas=3, int
 
 def mapear_tela_atual_para_json(driver, nome_da_tela):
     """Lê todos os botões e campos da página atual e cria um dicionário (catalogo) deles."""
-    # Busca inputs, buttons, selects e links que tenham texto ou atributo 'title'
+    # Busca inputs, textareas, buttons, selects e links que tenham texto ou atributo 'title'
     elementos = driver.find_elements(
         By.XPATH, 
-        "//input[not(@type='hidden')] | //button | //select | //a[text()] | //a[@title] | //a[@href]"
+        "//input[not(@type='hidden')] | //textarea | //button | //select | //a[text()] | //a[@title] | //a[@href]"
     )
     
     mapa_tela = {}
