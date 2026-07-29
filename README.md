@@ -8,26 +8,26 @@ A ferramenta foi projetada para lidar com rotinas repetitivas do sistema, suport
 
 ## Funcionalidades Principais
 
-* **Gerenciador de Sessao Universal:** Utiliza uma unica instancia do Google Chrome compartilhada entre o mapeador de telas e o executor de workflows, evitando a abertura de multiplas janelas.
+* **Gerenciador de Sessao Único:** Utiliza uma unica instancia do Google Chrome compartilhada entre o mapeador de telas e o executor de workflows, evitando a abertura de multiplas janelas.
 * **Suporte a Multiplos Ambientes:** Alternancia dinamica entre o ambiente Sigaa UFG ou outro adicionado.
 * **Autenticacao Inteligente:** Deteccao automatica de login ativo baseada em elementos do DOM interno (como o link de logoff e menu principal), evitando falsos positivos em paginas publicas ou em branco.
 * **Construtor Flexivel de Workflows:**
-  * **Tipos de Acao:** Clicar, Preencher, Navegar, Validar Texto, Iniciar Loop e Fim de Loop.
-  * **Posicionamento Direcionado:** Opcao de inserir novos passos no final, antes ou depois de qualquer passo existente.
-  * **Reordenacao:** Botoes para mover passos para cima ou para baixo.
-  * **Importacao e Exportacao:** Possibilidade de salvar o workflow em formato JSON e carrega-lo posteriormente em qualquer maquina.
+* **Tipos de Acao:** Clicar, Preencher, Navegar, Validar Texto, Iniciar Loop e Fim de Loop.
+* **Posicionamento Direcionado:** Opcao de inserir novos passos no final, antes ou depois de qualquer passo existente.
+* **Reordenacao:** Botoes para mover passos para cima ou para baixo.
+* **Importacao e Exportacao:** Possibilidade de salvar o workflow em formato JSON e carrega-lo posteriormente em qualquer maquina.
 * **Iteracao com Multiplas Planilhas (Loops):**
-  * Suporte ao upload simultaneo de arquivos Excel (.xlsx, .xls) e CSV.
-  * Mapeamento individual de campos para colunas especificas de cada planilha.
-  * Re-vinculacao dinamica de planilhas ao importar workflows salvos.
+* Suporte ao upload simultaneo de arquivos Excel (.xlsx, .xls) e CSV.
+* Mapeamento individual de campos para colunas especificas de cada planilha.
+* Re-vinculacao dinamica de planilhas ao importar workflows salvos.
 * **Preenchimento Resiliente (Tratamento JSF):**
-  * Digitacao caractere por caractere com atraso ajustavel para compatibilidade com mascaras de JavaScript do SIGAA.
-  * Disparo manual de eventos DOM (`input`, `change`, `keyup`) para notificacao do estado de componentes RichFaces sem reset por foco.
-  * Conversao automatica de IDs com dois pontos (`id:com:colons`) para expressoes XPath literais.
+* Digitacao caractere por caractere com atraso ajustavel para compatibilidade com mascaras de JavaScript do SIGAA.
+* Disparo manual de eventos DOM (`input`, `change`, `keyup`) para notificacao do estado de componentes RichFaces sem reset por foco.
+* Conversao automatica de IDs com dois pontos (`id:com:colons`) para expressoes XPath literais.
 * **Sistema de Re-tentativas e Checkpoint:**
-  * Configuracao individual de quantidade de tentativas e intervalos de pausa para cada acao.
-  * Normalizacao de texto (remocao de quebras de linha e caracteres HTML) para validacao flexivel de mensagens na tela.
-  * Interrupcao automatica em caso de erro com geracao de relatorio detalhado em `checkpoint.json` (registrando a linha exata, o valor processado, a planilha e a mensagem de erro).
+* Configuracao individual de quantidade de tentativas e intervalos de pausa para cada acao.
+* Normalizacao de texto (remocao de quebras de linha e caracteres HTML) para validacao flexivel de mensagens na tela.
+* Interrupcao automatica em caso de erro com geracao de relatorio detalhado em `checkpoint.json` (registrando a linha exata, o valor processado, a planilha e a mensagem de erro).
 
 ---
 
