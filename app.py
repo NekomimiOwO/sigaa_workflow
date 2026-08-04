@@ -217,10 +217,19 @@ def encontrar_elemento_com_fallback(driver, wait, passo, retentativas=3, interva
 def preencher_campo_sigaa(driver, elem, valor, modo_select="auto"):
     """Preenche campos normais, seleciona dropdowns <select> ou aciona Radio Buttons dinamicamente."""
     val_str = str(valor).strip()
+    
+    # Tratamento para ignorar valores nulos provenientes do Pandas/Excel
+    if val_str.lower() in ["nan", "none", "<na>", "null"]:
+        val_str = ""
+
     tag_name = elem.tag_name.lower()
     type_attr = (elem.get_attribute("type") or "").lower()
 
+    # --- TRATAMENTO PARA RADIO BUTTONS (<input type="radio">) ---
     if tag_name == "input" and type_attr == "radio":
+        if not val_str:
+            return  # Se o valor for vazio, não aciona nenhum botão rádio
+            
         radio_name = elem.get_attribute("name")
         radios = driver.find_elements(By.XPATH, f"//input[@type='radio' and @name='{radio_name}']") if radio_name else [elem]
         
@@ -254,7 +263,11 @@ def preencher_campo_sigaa(driver, elem, valor, modo_select="auto"):
         else:
             raise Exception(f"Opção de botão rádio '{val_str}' não foi encontrada no grupo.")
 
+    # --- TRATAMENTO PARA CAMPOS DE SELEÇÃO (<select>) ---
     if tag_name == "select":
+        if not val_str:
+            return  # Se estiver vazio na planilha, não altera a seleção do dropdown
+            
         try:
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem)
         except Exception:
@@ -288,6 +301,7 @@ def preencher_campo_sigaa(driver, elem, valor, modo_select="auto"):
 
         raise Exception(f"Opção correspondente a '{val_str}' não foi encontrada no campo de seleção.")
 
+    # Preenchimento padrão para caixas de texto (inputs/textareas)
     try:
         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem)
         driver.execute_script("arguments[0].focus(); arguments[0].click();", elem)
@@ -301,6 +315,11 @@ def preencher_campo_sigaa(driver, elem, valor, modo_select="auto"):
         time.sleep(0.05)
     except Exception:
         driver.execute_script("arguments[0].value = '';", elem)
+
+    # Se for string vazia, apenas apaga o conteúdo anterior e dispara o evento
+    if not val_str:
+        _disparar_eventos_change(driver, elem)
+        return
 
     try:
         for char in val_str:
@@ -394,7 +413,7 @@ def validar_texto_na_tela(driver, texto_esperado, timeout=5, retentativas=3, int
     return False
 
 def mapear_tela_atual_para_json(driver, nome_da_tela):
-    """Captura os botões, campos, dropdowns, radio buttons e links da página atual."""
+    """Captura os botões, campos, dropdowns, radio buttons e inputs de tabelas da página atual."""
     elementos = driver.find_elements(
         By.XPATH, 
         "//input[not(@type='hidden')] | //textarea | //button | //select | //a[text()] | //a[@title] | //a[@href]"
@@ -419,6 +438,25 @@ def mapear_tela_atual_para_json(driver, nome_da_tela):
             
             if "yuievtautoid" in id_attr.lower():
                 continue
+
+            # --- DETECÇÃO DE CAMPOS EM TABELAS COM <th> (EX: EQUIVALÊNCIA / PRÉ-REQUISITOS) ---
+            if tag_name in ["input", "select", "textarea"] and not id_attr.startswith("j_id") and not title_attr:
+                try:
+                    parent_tr = elem.find_element(By.XPATH, "./ancestor::tr[1]")
+                    th_elems = parent_tr.find_elements(By.TAG_NAME, "th")
+                    if th_elems:
+                        th_text = th_elems[0].text.strip().rstrip(":")
+                        if th_text and len(th_text) > 1 and th_text.lower() not in ruidos_ignorar:
+                            nome_chave = re.sub(r'[^\w\s]', '', th_text).strip().lower().replace(" ", "_")
+                            mapa_tela[nome_chave] = {
+                                "by": "xpath",
+                                "target": f"//tr[th[contains(text(), '{th_text}')]]//{tag_name}",
+                                "nome_original": nome_chave
+                            }
+                            continue
+                except Exception:
+                    pass
+            # ----------------------------------------------------------------------------------
 
             if tag_name == "input" and tipo_attr == "radio":
                 chave_grupo = f"radio_group_marker_{name_attr}"
@@ -921,6 +959,7 @@ with tab1:
 
                 for f in files_loop:
                     df = pd.read_csv(f) if f.name.endswith(".csv") else pd.read_excel(f)
+                    df = df.fillna("")  # Substitui células vazias do Excel por string vazia ""
                     planilhas_processadas[f.name] = df.astype(str).to_dict(orient="list")
                     if len(df) > max_linhas:
                         max_linhas = len(df)
@@ -996,6 +1035,7 @@ with tab1:
                     re_max = 0
                     for rf in re_files:
                         rdf = pd.read_csv(rf) if rf.name.endswith(".csv") else pd.read_excel(rf)
+                        rdf = rdf.fillna("")  # Substitui células vazias do Excel por string vazia ""
                         re_planilhas[rf.name] = rdf.astype(str).to_dict(orient="list")
                         if len(rdf) > re_max:
                             re_max = len(rdf)
