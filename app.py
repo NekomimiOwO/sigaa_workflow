@@ -9,9 +9,10 @@ from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support.ui import WebDriverWait, Select
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.common.action_chains import ActionChains
 
 # ==============================================================================
 # CONFIGURAÇÃO GERAL DA PÁGINA (Interface Gráfica com Streamlit)
@@ -64,7 +65,7 @@ def salvar_json_local(caminho, dados):
         json.dump(dados, f, indent=2, ensure_ascii=False)
 
 def salvar_elemento_no_catalogo(modulo_pai, nome_tela, mapa_elementos):
-    """Atualiza o catálogo respeitando elementos desativados e preservando nomes originais."""
+    """Atualiza o catálogo respeitando elementos desativados, opções de dropdown/radio e nomes originais."""
     dados = carregar_json_local(ARQUIVO_CATALOGO)
     
     if modulo_pai not in dados:
@@ -75,13 +76,17 @@ def salvar_elemento_no_catalogo(modulo_pai, nome_tela, mapa_elementos):
     for chave, dados_novo_elemento in mapa_elementos.items():
         elemento_existente = dados[modulo_pai][nome_tela].get(chave, {})
         
-        # Se o elemento já existe e está marcado como falso positivo, preserva o status desativado
         if elemento_existente.get("ativo") == False:
             continue
         
         dados_novo_elemento["ativo"] = True
-        # Garante a gravação do nome original para permitir restaurações futuras
         dados_novo_elemento["nome_original"] = elemento_existente.get("nome_original", chave)
+        
+        if "opcoes" in elemento_existente and "opcoes" not in dados_novo_elemento:
+            dados_novo_elemento["opcoes"] = elemento_existente["opcoes"]
+            dados_novo_elemento["is_select"] = elemento_existente.get("is_select", False)
+            dados_novo_elemento["is_radio"] = elemento_existente.get("is_radio", False)
+
         dados[modulo_pai][nome_tela][chave] = dados_novo_elemento
         
     salvar_json_local(ARQUIVO_CATALOGO, dados)
@@ -91,6 +96,53 @@ def salvar_elemento_no_catalogo(modulo_pai, nome_tela, mapa_elementos):
 # ==============================================================================
 # 2. FUNÇÕES DE AUTOMAÇÃO SELENIUM (O "Cérebro" do Robô)
 # ==============================================================================
+
+def pressionar_tecla_ou_atalho(driver, tecla_config):
+    """Executa o pressionamento de uma tecla simples (ENTER, TAB) ou combinação (ALT+A, CTRL+S)."""
+    actions = ActionChains(driver)
+    tecla_clean = str(tecla_config).strip().upper()
+    
+    teclas_map = {
+        "ENTER": Keys.ENTER,
+        "TAB": Keys.TAB,
+        "ESC": Keys.ESCAPE,
+        "ESCAPE": Keys.ESCAPE,
+        "SPACE": Keys.SPACE,
+        "ESPAÇO": Keys.SPACE,
+        "BACKSPACE": Keys.BACKSPACE,
+        "DELETE": Keys.DELETE,
+        "UP": Keys.ARROW_UP,
+        "DOWN": Keys.ARROW_DOWN,
+        "LEFT": Keys.ARROW_LEFT,
+        "RIGHT": Keys.ARROW_RIGHT
+    }
+    
+    if "+" in tecla_clean:
+        partes = [p.strip() for p in tecla_clean.split("+")]
+        modificadores = []
+        tecla_final = partes[-1]
+        
+        for mod in partes[:-1]:
+            if mod in ["ALT", "ALT_LEFT"]:
+                modificadores.append(Keys.ALT)
+            elif mod in ["CTRL", "CONTROL"]:
+                modificadores.append(Keys.CONTROL)
+            elif mod in ["SHIFT"]:
+                modificadores.append(Keys.SHIFT)
+        
+        for m in modificadores:
+            actions.key_down(m)
+        
+        key_code = teclas_map.get(tecla_final, tecla_final.lower())
+        actions.send_keys(key_code)
+        
+        for m in reversed(modificadores):
+            actions.key_up(m)
+            
+        actions.perform()
+    else:
+        key_code = teclas_map.get(tecla_clean, tecla_clean.lower())
+        actions.send_keys(key_code).perform()
 
 def parsear_seletor(sel_str):
     """Recebe um texto de seletor e converte pro padrão do Selenium."""
@@ -162,10 +214,80 @@ def encontrar_elemento_com_fallback(driver, wait, passo, retentativas=3, interva
 
     raise Exception(f"Elemento não localizado ({target_raw}) após {retentativas} tentativa(s). Erro: {ultimo_erro}")
 
-def preencher_campo_sigaa(driver, elem, valor):
-    """Preenche campos lidando com as máscaras do framework JSF do SIGAA."""
+def preencher_campo_sigaa(driver, elem, valor, modo_select="auto"):
+    """Preenche campos normais, seleciona dropdowns <select> ou aciona Radio Buttons dinamicamente."""
     val_str = str(valor).strip()
-    
+    tag_name = elem.tag_name.lower()
+    type_attr = (elem.get_attribute("type") or "").lower()
+
+    if tag_name == "input" and type_attr == "radio":
+        radio_name = elem.get_attribute("name")
+        radios = driver.find_elements(By.XPATH, f"//input[@type='radio' and @name='{radio_name}']") if radio_name else [elem]
+        
+        target_to_click = None
+
+        for r in radios:
+            r_id = r.get_attribute("id") or ""
+            r_val = (r.get_attribute("value") or "").strip()
+            
+            labels = driver.find_elements(By.XPATH, f"//label[@for='{r_id}']")
+            lbl_text = labels[0].text.strip() if labels else ""
+
+            if val_str.lower() == lbl_text.lower() or (val_str and val_str == r_val):
+                target_to_click = labels[0] if labels else r
+                break
+            
+            if val_str.isdigit():
+                nums = re.findall(r'\d+', lbl_text)
+                if val_str in nums:
+                    target_to_click = labels[0] if labels else r
+                    break
+            
+            if val_str.lower() in lbl_text.lower():
+                target_to_click = labels[0] if labels else r
+                break
+
+        if target_to_click:
+            clicar_elemento_seguro(driver, target_to_click)
+            _disparar_eventos_change(driver, target_to_click)
+            return
+        else:
+            raise Exception(f"Opção de botão rádio '{val_str}' não foi encontrada no grupo.")
+
+    if tag_name == "select":
+        try:
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem)
+        except Exception:
+            pass
+        
+        select_obj = Select(elem)
+        
+        if modo_select == "numero" or (modo_select == "auto" and val_str.isdigit()):
+            val_num = val_str
+            for option in select_obj.options:
+                opt_text = option.text.strip()
+                numeros_no_texto = re.findall(r'\d+', opt_text)
+                if val_num in numeros_no_texto:
+                    select_obj.select_by_visible_text(opt_text)
+                    _disparar_eventos_change(driver, elem)
+                    return
+
+        for option in select_obj.options:
+            opt_text = option.text.strip()
+            if val_str.lower() == opt_text.lower():
+                select_obj.select_by_visible_text(opt_text)
+                _disparar_eventos_change(driver, elem)
+                return
+
+        for option in select_obj.options:
+            opt_text = option.text.strip()
+            if opt_text and val_str.lower() in opt_text.lower():
+                select_obj.select_by_visible_text(opt_text)
+                _disparar_eventos_change(driver, elem)
+                return
+
+        raise Exception(f"Opção correspondente a '{val_str}' não foi encontrada no campo de seleção.")
+
     try:
         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem)
         driver.execute_script("arguments[0].focus(); arguments[0].click();", elem)
@@ -187,6 +309,10 @@ def preencher_campo_sigaa(driver, elem, valor):
     except Exception:
         driver.execute_script("arguments[0].value = arguments[1];", elem, val_str)
 
+    _disparar_eventos_change(driver, elem)
+
+def _disparar_eventos_change(driver, elem):
+    """Dispara eventos JS obrigatórios para o JSF do SIGAA reconhecer a alteração."""
     try:
         driver.execute_script("""
             var el = arguments[0];
@@ -268,7 +394,7 @@ def validar_texto_na_tela(driver, texto_esperado, timeout=5, retentativas=3, int
     return False
 
 def mapear_tela_atual_para_json(driver, nome_da_tela):
-    """Captura os botões, campos e links da página atual."""
+    """Captura os botões, campos, dropdowns, radio buttons e links da página atual."""
     elementos = driver.find_elements(
         By.XPATH, 
         "//input[not(@type='hidden')] | //textarea | //button | //select | //a[text()] | //a[@title] | //a[@href]"
@@ -283,18 +409,98 @@ def mapear_tela_atual_para_json(driver, nome_da_tela):
     for elem in elementos:
         try:
             id_attr = elem.get_attribute("id") or ""
+            name_attr = elem.get_attribute("name") or ""
             title_attr = elem.get_attribute("title") or ""
             texto_visivel = elem.text.strip()
             
             tag_name = elem.tag_name.lower()
-            tipo_attr = elem.get_attribute("type") or ""
+            tipo_attr = (elem.get_attribute("type") or "").lower()
             value_attr = elem.get_attribute("value") or ""
-            
-            if not texto_visivel and tag_name == "input" and tipo_attr in ["submit", "button"] and value_attr:
-                texto_visivel = value_attr.strip()
             
             if "yuievtautoid" in id_attr.lower():
                 continue
+
+            if tag_name == "input" and tipo_attr == "radio":
+                chave_grupo = f"radio_group_marker_{name_attr}"
+                if name_attr and chave_grupo in mapa_tela:
+                    continue
+                
+                radios_grupo = driver.find_elements(By.XPATH, f"//input[@type='radio' and @name='{name_attr}']") if name_attr else [elem]
+                opcoes_radio = []
+                textos_radio = []
+
+                for r in radios_grupo:
+                    r_id = r.get_attribute("id") or ""
+                    r_val = (r.get_attribute("value") or "").strip()
+                    lbls = driver.find_elements(By.XPATH, f"//label[@for='{r_id}']")
+                    lbl_txt = lbls[0].text.strip() if lbls else ""
+                    if lbl_txt or r_val:
+                        opcoes_radio.append({"texto": lbl_txt, "valor": r_val})
+                        if lbl_txt:
+                            textos_radio.append(lbl_txt)
+
+                if opcoes_radio:
+                    primeiro_txt = textos_radio[0] if textos_radio else "opcao"
+                    nome_chave = re.sub(r'[^\w\s]', '', primeiro_txt).strip().lower().replace(" ", "_")
+                    if not nome_chave.startswith("opcao_") and not nome_chave.startswith("radio_"):
+                        nome_chave = f"opcao_{nome_chave}"
+                    
+                    target_xpath = f"//input[@type='radio' and @name='{name_attr}']" if name_attr else f"//*[@id='{id_attr}']"
+
+                    mapa_tela[nome_chave] = {
+                        "by": "xpath",
+                        "target": target_xpath,
+                        "nome_original": nome_chave,
+                        "is_radio": True,
+                        "opcoes": opcoes_radio
+                    }
+                    if name_attr:
+                        mapa_tela[chave_grupo] = True
+                    continue
+
+            if tag_name == "select":
+                try:
+                    opts = elem.find_elements(By.TAG_NAME, "option")
+                    opcoes_detalhadas = []
+                    textos_validos = []
+                    
+                    for o in opts:
+                        txt_opt = o.text.strip()
+                        val_opt = (o.get_attribute("value") or "").strip()
+                        if txt_opt or val_opt:
+                            opcoes_detalhadas.append({"texto": txt_opt, "valor": val_opt})
+                            if txt_opt:
+                                textos_validos.append(txt_opt)
+                    
+                    if opcoes_detalhadas:
+                        nome_chave = ""
+                        if title_attr:
+                            nome_chave = title_attr.lower().replace(" ", "_")
+                        elif id_attr and not id_attr.startswith("j_id"):
+                            nome_chave = id_attr.split(":")[-1]
+                        
+                        if not nome_chave:
+                            amostra = "_".join([re.sub(r'[^\w\s]', '', t).strip().lower().replace(" ", "_") for t in textos_validos[:2]])
+                            nome_chave = f"selecionar_{amostra}" if amostra else "selecionar_opcao"
+
+                        nome_chave = re.sub(r'[^\w\s]', '', nome_chave).strip().lower().replace(" ", "_")
+                        
+                        primeiro_txt = textos_validos[0] if textos_validos else ""
+                        target_xpath = f"//select[@id='{id_attr}']" if id_attr and not id_attr.startswith("j_id") else f"//select[option[contains(text(), '{primeiro_txt}')]]"
+
+                        mapa_tela[nome_chave] = {
+                            "by": "xpath",
+                            "target": target_xpath,
+                            "nome_original": nome_chave,
+                            "is_select": True,
+                            "opcoes": opcoes_detalhadas
+                        }
+                        continue
+                except Exception:
+                    pass
+            
+            if not texto_visivel and tag_name == "input" and tipo_attr in ["submit", "button"] and value_attr:
+                texto_visivel = value_attr.strip()
                 
             if texto_visivel and len(texto_visivel) > 1:
                 if texto_visivel.lower() in ruidos_ignorar:
@@ -328,10 +534,19 @@ def mapear_tela_atual_para_json(driver, nome_da_tela):
                     "target": f"//*[@title='{title_attr}']",
                     "nome_original": nome_chave
                 }
+            elif name_attr:
+                nome_chave = name_attr.split(":")[-1]
+                nome_chave = re.sub(r'[^\w\s]', '', nome_chave).strip().lower()
+                mapa_tela[nome_chave] = {
+                    "by": "xpath",
+                    "target": f"//*[@name='{name_attr}']",
+                    "nome_original": nome_chave
+                }
         except Exception:
             continue
-            
-    return {nome_da_tela: mapa_tela}
+
+    mapa_tela_final = {k: v for k, v in mapa_tela.items() if v is not True}
+    return {nome_da_tela: mapa_tela_final}
 
 
 # ==============================================================================
@@ -474,13 +689,12 @@ with tab1:
 
     st.divider()
 
-    # --- SEÇÃO DE ADICIONAR NOVOS PASSOS (COM KEYS FIXAS PARA EVITAR CONGELAMENTO) ---
     with st.expander("➕ Adicionar Novo Passo ao Workflow", expanded=True):
         catalogo = carregar_json_local(ARQUIVO_CATALOGO)
         
         col_pos1, col_pos2 = st.columns([2, 2])
         with col_pos1:
-            tipo_passo = st.selectbox("Tipo de Ação:", ["Clicar", "Preencher", "Navegar", "Validar Texto", "🔁 Iniciar Loop", "🔚 Fim de Loop"], key="add_tipo_passo")
+            tipo_passo = st.selectbox("Tipo de Ação:", ["Clicar", "Preencher", "Pressionar Tecla", "Navegar", "Validar Texto", "🔁 Iniciar Loop", "🔚 Fim de Loop"], key="add_tipo_passo")
         with col_pos2:
             total_p = len(st.session_state.steps)
             opcoes_posicao = ["No final do workflow"] + [f"Antes do Passo {i+1}" for i in range(total_p)] + [f"Depois do Passo {i+1}" for i in range(total_p)]
@@ -503,6 +717,7 @@ with tab1:
             target_add = ""
             by_add = "xpath"
             nome_exibicao = ""
+            dados_elem_sel = {}
 
             if origem_seletor == "Usar Catálogo Mapeado (Recomendado)" and catalogo:
                 col_h1, col_h2, col_h3 = st.columns(3)
@@ -518,9 +733,9 @@ with tab1:
                     elem_sel = st.selectbox("3. Elemento:", list(elementos_ativos.keys()), key="add_elem_sel")
 
                 if elem_sel in elementos_ativos:
-                    dados_elem = elementos_ativos[elem_sel]
-                    target_add = dados_elem["target"]
-                    by_add = dados_elem["by"]
+                    dados_elem_sel = elementos_ativos[elem_sel]
+                    target_add = dados_elem_sel["target"]
+                    by_add = dados_elem_sel["by"]
                     nome_exibicao = f"{mod_sel} -> {tela_sel} -> {elem_sel}"
                     st.caption(f"🎯 Seletor extraído do catálogo: `{target_add}` (Tipo: `{by_add}`)")
 
@@ -541,9 +756,22 @@ with tab1:
             usar_loop_val = False
             planilha_ref = ""
             coluna_ref = ""
+            modo_select_add = "auto"
 
             if tipo_passo == "Preencher":
+                is_radio = dados_elem_sel.get("is_radio", False)
+                is_dropdown = dados_elem_sel.get("is_select", False) or bool(dados_elem_sel.get("opcoes"))
+
+                if is_radio:
+                    st.info("🔘 **Campo de Opções (Radio Buttons):** O robô acionará a opção dinamicamente com base no texto enviado (ex: `'NÚCLEO COMUM OBRIGATÓRIO'`) ou no número do atributo/posição (ex: `'1'` ou `'4'`).")
+                    if dados_elem_sel.get("opcoes"):
+                        opts_str = ", ".join([f"`{o['texto']}`" for o in dados_elem_sel["opcoes"] if o['texto']])
+                        st.caption(f"Opções disponíveis neste grupo: {opts_str}")
+                elif is_dropdown:
+                    st.caption("💡 **Campo Dropdown (<select>):** Você pode digitar/enviar o número da opção (ex: `1` para `1º Per.`) ou o texto exato (ex: `ATIVO`).")
+
                 usar_loop_val = st.checkbox("Usar valor de Planilha do Loop", value=True, key="add_usar_loop_val")
+                
                 if usar_loop_val:
                     if st.session_state.planilhas_disponiveis:
                         col_pl1, col_pl2 = st.columns(2)
@@ -552,10 +780,19 @@ with tab1:
                         with col_pl2:
                             colunas_disp = list(st.session_state.planilhas_disponiveis[planilha_ref].keys())
                             coluna_ref = st.selectbox("Selecione a Coluna:", colunas_disp, key="add_coluna_ref")
+                            
+                        if is_dropdown:
+                            modo_select_opt = st.radio(
+                                "Modo de Mapeamento do Dropdown para a Planilha:",
+                                ["Mapear por Número (ex: 1 -> busca '1º Per.')", "Texto Visível Exato (ex: ATIVO)"],
+                                horizontal=True,
+                                key="add_modo_select_radio"
+                            )
+                            modo_select_add = "numero" if "Número" in modo_select_opt else "texto"
                     else:
                         st.warning("Adicione um '🔁 Iniciar Loop' com planilhas para habilitar a seleção de colunas.")
                 else:
-                    valor_add = st.text_input("Valor fixo a preencher:", key="add_valor_fixo")
+                    valor_add = st.text_input("Valor fixo a preencher/acionar:", key="add_valor_fixo", help="Digite o texto exato da opção desejada ou o número.")
 
             if st.button(f"➕ Adicionar {tipo_passo} ao Workflow", type="primary"):
                 if target_add:
@@ -566,7 +803,11 @@ with tab1:
                         "rotulo": nome_exibicao,
                         "tempo_espera": tempo_pausa_add,
                         "retentativas": retentativas_add,
-                        "intervalo_retentativa": intervalo_add
+                        "intervalo_retentativa": intervalo_add,
+                        "opcoes_select": dados_elem_sel.get("opcoes", []),
+                        "is_select": dados_elem_sel.get("is_select", False),
+                        "is_radio": dados_elem_sel.get("is_radio", False),
+                        "modo_select": modo_select_add
                     }
                     if tipo_passo == "Preencher":
                         novo_step["valor"] = valor_add
@@ -578,6 +819,44 @@ with tab1:
                     st.session_state.steps.insert(idx_ins, novo_step)
                     st.success(f"Passo '{tipo_passo}' inserido na posição {idx_ins + 1}!")
                     st.rerun()
+
+        elif tipo_passo == "Pressionar Tecla":
+            col_k1, col_k2, col_k3 = st.columns(3)
+            with col_k1:
+                tipo_tecla_opt = st.selectbox(
+                    "Tecla ou Atalho:", 
+                    ["ENTER", "TAB", "ESC", "SPACE", "BACKSPACE", "UP", "DOWN", "Digitar Atalho Customizado..."],
+                    key="add_tipo_tecla_opt"
+                )
+                if tipo_tecla_opt == "Digitar Atalho Customizado...":
+                    tecla_final_add = st.text_input("Atalho (ex: ALT+A, CTRL+S, SHIFT+TAB):", value="ALT+A", key="add_tecla_custom")
+                else:
+                    tecla_final_add = tipo_tecla_opt
+
+            with col_k2:
+                usar_loop_tecla = st.checkbox("Usar Atalho da Planilha do Loop", value=False, key="add_usar_loop_tecla")
+                planilha_ref_k = ""
+                coluna_ref_k = ""
+                if usar_loop_tecla:
+                    if st.session_state.planilhas_disponiveis:
+                        planilha_ref_k = st.selectbox("Planilha:", list(st.session_state.planilhas_disponiveis.keys()), key="add_planilha_ref_k")
+                        coluna_ref_k = st.selectbox("Coluna:", list(st.session_state.planilhas_disponiveis[planilha_ref_k].keys()), key="add_coluna_ref_k")
+
+            with col_k3:
+                tempo_pausa_add = st.number_input("Pausa após acionar (s):", min_value=0.0, value=0.5, step=0.5, key="add_pausa_tecla")
+
+            if st.button("➕ Adicionar Pressionamento de Tecla", type="primary"):
+                idx_ins = calcular_indice_insercao()
+                st.session_state.steps.insert(idx_ins, {
+                    "acao": "Pressionar Tecla",
+                    "tecla": tecla_final_add,
+                    "usar_loop": usar_loop_tecla,
+                    "planilha_ref": planilha_ref_k,
+                    "coluna_ref": coluna_ref_k,
+                    "tempo_espera": tempo_pausa_add
+                })
+                st.success("Passo 'Pressionar Tecla' inserido!")
+                st.rerun()
 
         elif tipo_passo == "Navegar":
             col_nav1, col_nav2 = st.columns([3, 1])
@@ -676,7 +955,6 @@ with tab1:
             m_lin = step.get("max_linhas", 0)
             nomes_planilhas_loop = list(planilhas_no_step.keys())
             
-            # Verifica se algum outro passo do workflow depende das planilhas deste loop
             passos_dependentes = [
                 i + 1 for i, s in enumerate(st.session_state.steps)
                 if s.get("acao") == "Preencher" 
@@ -703,7 +981,6 @@ with tab1:
                         st.error(f"⛔ Altere ou exclua primeiro o(s) passo(s) dependente(s): {passos_dependentes}")
                     else:
                         st.session_state.steps.pop(idx)
-                        # Recalcula as planilhas disponíveis no estado global
                         st.session_state.planilhas_disponiveis = {}
                         for s in st.session_state.steps:
                             if s.get("acao") == "Iniciar Loop" and "planilhas" in s:
@@ -750,7 +1027,7 @@ with tab1:
                     st.rerun()
 
         else:
-            rotulo_card = step.get('rotulo') or step.get('seletor_target') or step.get('detalhe', '')
+            rotulo_card = step.get('rotulo') or step.get('seletor_target') or step.get('detalhe') or step.get('tecla', '')
             with st.expander(f"Passo {idx + 1}: {acao} - {rotulo_card}", expanded=False):
                 col1, col2, col3 = st.columns([2, 4, 1])
                 with col1:
@@ -771,16 +1048,37 @@ with tab1:
 
                     if acao == "Navegar":
                         step["detalhe"] = st.text_input(f"URL de Destino", value=step.get("detalhe", ""), key=f"url_{idx}")
+                    elif acao == "Pressionar Tecla":
+                        step["tecla"] = st.text_input("Tecla/Atalho a Pressionar (ex: ENTER, ALT+A):", value=step.get("tecla", "ENTER"), key=f"tec_{idx}")
+                        step["usar_loop"] = st.checkbox("Usar atalho da Planilha do Loop", value=step.get("usar_loop", False), key=f"chk_k_{idx}")
+                        if step["usar_loop"] and st.session_state.planilhas_disponiveis:
+                            col_pl1, col_pl2 = st.columns(2)
+                            planilhas_list = list(st.session_state.planilhas_disponiveis.keys())
+                            p_index = planilhas_list.index(step.get("planilha_ref")) if step.get("planilha_ref") in planilhas_list else 0
+                            with col_pl1:
+                                step["planilha_ref"] = st.selectbox("Planilha Alvo:", planilhas_list, index=p_index, key=f"plan_ref_k_{idx}")
+                            with col_pl2:
+                                colunas_list = list(st.session_state.planilhas_disponiveis[step["planilha_ref"]].keys())
+                                c_index = colunas_list.index(step.get("coluna_ref")) if step.get("coluna_ref") in colunas_list else 0
+                                step["coluna_ref"] = st.selectbox("Coluna Alvo:", colunas_list, index=c_index, key=f"col_ref_k_{idx}")
+
                     elif acao == "Preencher":
                         step["seletor_target"] = st.text_input(f"Seletor", value=step.get("seletor_target", ""), key=f"sel_{idx}")
+                        
+                        is_card_dropdown = step.get("is_select", False) or bool(step.get("opcoes_select"))
+                        is_card_radio = step.get("is_radio", False)
+
+                        if is_card_radio:
+                            st.caption("🔘 **Opções deste Grupo de Radio:** " + ", ".join([f"`{o['texto']}`" for o in step.get("opcoes_select", []) if o['texto']]))
+                        elif is_card_dropdown:
+                            st.caption("💡 **Campo Dropdown:** Aceita números (ex: `1` $\\rightarrow$ `1º Per.`) ou o texto exato.")
+
                         step["usar_loop"] = st.checkbox("Usar valor de Planilha do Loop", value=step.get("usar_loop", True), key=f"chk_loop_{idx}")
                         
                         if step["usar_loop"]:
                             if st.session_state.planilhas_disponiveis:
                                 col_pl1, col_pl2 = st.columns(2)
                                 planilhas_list = list(st.session_state.planilhas_disponiveis.keys())
-                                
-                                # Recupera o índice salvo ou usa o primeiro disponível
                                 p_index = planilhas_list.index(step.get("planilha_ref")) if step.get("planilha_ref") in planilhas_list else 0
                                 
                                 with col_pl1:
@@ -790,10 +1088,23 @@ with tab1:
                                     colunas_list = list(st.session_state.planilhas_disponiveis[step["planilha_ref"]].keys())
                                     c_index = colunas_list.index(step.get("coluna_ref")) if step.get("coluna_ref") in colunas_list else 0
                                     step["coluna_ref"] = st.selectbox("Coluna Alvo:", colunas_list, index=c_index, key=f"col_ref_{idx}")
+
+                                if is_card_dropdown:
+                                    modo_atual = step.get("modo_select", "auto")
+                                    idx_modo = 0 if modo_atual == "numero" else 1
+                                    modo_opt_card = st.radio(
+                                        "Tipo de Dado na Coluna da Planilha:",
+                                        ["Número (ex: 1 -> busca '1º Per.')", "Texto Visível Exato (ex: ATIVO)"],
+                                        index=idx_modo,
+                                        horizontal=True,
+                                        key=f"modo_sel_card_{idx}"
+                                    )
+                                    step["modo_select"] = "numero" if "Número" in modo_opt_card else "texto"
                             else:
                                 st.warning("⚠️ Adicione ou re-vincule planilhas no passo 'Iniciar Loop' para selecionar as colunas.")
                         else:
-                            step["valor"] = st.text_input(f"Valor Fixo", value=step.get("valor", ""), key=f"val_{idx}")
+                            step["valor"] = st.text_input("Valor Fixo", value=step.get("valor", ""), key=f"val_{idx}")
+                                
                     elif acao == "Clicar":
                         step["seletor_target"] = st.text_input(f"Seletor", value=step.get("seletor_target", ""), key=f"sel_{idx}")
                     elif acao == "Validar Texto":
@@ -866,6 +1177,16 @@ with tab1:
                             st.error(f"⛔ **Interrupção no Passo {step_idx + 1}:** Erro ao navegar para `{step['detalhe']}`.")
                             interrompido = True
 
+                    elif acao == "Pressionar Tecla" and not step.get("usar_loop", False):
+                        st.write(f"▶️ Pressionando tecla/atalho: `{step['tecla']}`")
+                        try:
+                            pressionar_tecla_ou_atalho(driver, step["tecla"])
+                            time.sleep(tempo_pausa)
+                            step_idx += 1
+                        except Exception as e_key_out:
+                            st.error(f"⛔ **Interrupção no Passo {step_idx + 1}:** Erro ao pressionar tecla `{step['tecla']}`: {e_key_out}")
+                            interrompido = True
+
                     elif acao == "Clicar":
                         st.write(f"▶️ Clicando em: `{step.get('rotulo', step['seletor_target'])}`")
                         try:
@@ -886,7 +1207,7 @@ with tab1:
                         st.write("▶️ Preenchendo campo com valor fixo...")
                         try:
                             elem = encontrar_elemento_com_fallback(driver, wait, step, retentativas=n_retentativas, intervalo=t_intervalo)
-                            preencher_campo_sigaa(driver, elem, step["valor"])
+                            preencher_campo_sigaa(driver, elem, step["valor"], modo_select=step.get("modo_select", "auto"))
                             time.sleep(tempo_pausa)
                             step_idx += 1
                         except Exception as e_pr_out:
@@ -950,9 +1271,9 @@ with tab1:
                                     except Exception:
                                         valor_atual_acao = "N/A"
                                 else:
-                                    valor_atual_acao = inner_step.get("valor", inner_step.get("detalhe", inner_step.get("texto", "")))
+                                    valor_atual_acao = inner_step.get("valor", inner_step.get("detalhe", inner_step.get("texto", inner_step.get("tecla", ""))))
 
-                                rotulo_p = inner_step.get("rotulo", inner_step.get("seletor_target", ""))
+                                rotulo_p = inner_step.get("rotulo", inner_step.get("seletor_target", inner_step.get("tecla", "")))
 
                                 if inner_acao == "Navegar":
                                     try:
@@ -960,6 +1281,16 @@ with tab1:
                                     except Exception as e_nav:
                                         registrar_falha_checkpoint(nome_key_checkpoint, i_item, inner_idx, inner_acao, rotulo_p, valor_atual_acao, planilha_atual, coluna_atual, e_nav)
                                         st.error(f"⛔ **Interrupção no Passo {inner_idx + 1} (Linha {i_item + 1}):** Erro ao navegar.")
+                                        interrompido = True
+                                        break
+                                    time.sleep(inner_pausa)
+
+                                elif inner_acao == "Pressionar Tecla":
+                                    try:
+                                        pressionar_tecla_ou_atalho(driver, valor_atual_acao)
+                                    except Exception as e_k:
+                                        registrar_falha_checkpoint(nome_key_checkpoint, i_item, inner_idx, inner_acao, rotulo_p, valor_atual_acao, planilha_atual, coluna_atual, e_k)
+                                        st.error(f"⛔ **Interrupção no Passo {inner_idx + 1} (Linha {i_item + 1}):** Falha ao pressionar tecla `{valor_atual_acao}`.")
                                         interrompido = True
                                         break
                                     time.sleep(inner_pausa)
@@ -978,7 +1309,7 @@ with tab1:
                                 elif inner_acao == "Preencher":
                                     try:
                                         elem = encontrar_elemento_com_fallback(driver, wait, inner_step, retentativas=inner_ret, intervalo=inner_inter)
-                                        preencher_campo_sigaa(driver, elem, valor_atual_acao)
+                                        preencher_campo_sigaa(driver, elem, valor_atual_acao, modo_select=inner_step.get("modo_select", "auto"))
                                     except Exception as e_pr:
                                         registrar_falha_checkpoint(nome_key_checkpoint, i_item, inner_idx, inner_acao, rotulo_p, valor_atual_acao, planilha_atual, coluna_atual, e_pr)
                                         st.error(f"⛔ **Interrupção no Passo {inner_idx + 1} (Linha {i_item + 1}):** Falha ao preencher o campo com valor `{valor_atual_acao}`.")
@@ -1043,11 +1374,23 @@ with tab2:
     
     col_sel1, col_sel2 = st.columns(2)
     with col_sel1:
-        opcoes = ["➕ Criar Novo Módulo..."] + modulos_existentes
-        mod_escolhido = st.selectbox("Módulo Pai:", opcoes)
-        modulo_pai_final = st.text_input("Nome do Módulo:", value="Modulo_Geral") if mod_escolhido == "➕ Criar Novo Módulo..." else mod_escolhido
+        opcoes_mod = ["➕ Criar Novo Módulo..."] + modulos_existentes
+        mod_escolhido = st.selectbox("1. Módulo Pai:", opcoes_mod, key="map_mod_escolhido")
+        
+        if mod_escolhido == "➕ Criar Novo Módulo...":
+            modulo_pai_final = st.text_input("Nome do Novo Módulo:", value="Modulo_Geral", key="map_mod_novo")
+        else:
+            modulo_pai_final = mod_escolhido
+
     with col_sel2:
-        nome_tela_input = st.text_input("Nome da Tela:", value="Consulta_Geral")
+        telas_existentes = list(catalogo_atual.get(modulo_pai_final, {}).keys())
+        opcoes_tela = ["➕ Criar Nova Tela..."] + telas_existentes
+        tela_escolhida = st.selectbox("2. Tela / Seção:", opcoes_tela, key="map_tela_escolhida")
+        
+        if tela_escolhida == "➕ Criar Nova Tela...":
+            nome_tela_input = st.text_input("Nome da Nova Tela:", value="Consulta_Geral", key="map_tela_nova")
+        else:
+            nome_tela_input = tela_escolhida
 
     st.divider()
 
@@ -1107,11 +1450,11 @@ with tab3:
 
 
 # ------------------------------------------------------------------------------
-# ABA 4: GERENCIADOR DE CATÁLOGO (TABELA COM CHECKBOX E RESTAURAÇÃO DE NOMES)
+# ABA 4: GERENCIADOR DE CATÁLOGO (CORRIGIDO: SALVAMENTO E LIMPEZA DE CACHE)
 # ------------------------------------------------------------------------------
 with tab4:
     st.subheader("🗂️ Gerenciador de Catálogo Mapeado")
-    st.write("Ative, desative (oculte falsos positivos) ou renomeie elementos através da tabela abaixo.")
+    st.write("Ative, desative, renomeie, edite seletores (XPaths) ou adicione novos elementos manuais.")
     
     catalogo_gerencia = carregar_json_local(ARQUIVO_CATALOGO)
     
@@ -1129,14 +1472,55 @@ with tab4:
                 
             if tela_gerencia:
                 dict_elementos = catalogo_gerencia[mod_gerencia][tela_gerencia]
+                key_editor = f"editor_{mod_gerencia}_{tela_gerencia}"
                 
                 st.divider()
                 st.markdown(f"### 📋 Gerenciar Elementos da Tela: `{tela_gerencia}`")
-                st.caption("• Desmarque a caixa 'Ativo' para ocultar elementos desnecessários (eles não aparecerão no editor e não serão sobrescritos).\n• Se apagar o 'Identificador' e salvar, o nome original será restaurado automaticamente.")
+                st.caption("• Você pode editar diretamente os nomes e os **Seletores/XPaths** na tabela abaixo.\n• Desmarque a caixa 'Ativo' para ocultar elementos desnecessários.\n• Se apagar o 'Identificador' e salvar, o nome original será restaurado automaticamente.")
                 
-                # Monta a estrutura da tabela
+                # --- BLOCO DE INSERÇÃO MANUAL DE NOVO ELEMENTO / PATH ---
+                with st.expander("➕ Adicionar Elemento/Seletor Customizado Manualmente a esta Tela"):
+                    col_m1, col_m2, col_m3 = st.columns([2, 3, 1])
+                    with col_m1:
+                        novo_nome_elem = st.text_input("Nome do Elemento:", value="horas_prerequisito", key="add_man_nome")
+                    with col_m2:
+                        novo_target_elem = st.text_input(
+                            "Seletor / XPath Customizado:", 
+                            value="//input[@maxlength='4' and following-sibling::text()[contains(., 'Horas')]]", 
+                            key="add_man_target"
+                        )
+                    with col_m3:
+                        novo_by_elem = st.selectbox("Tipo:", ["xpath", "id", "css_selector"], key="add_man_by")
+                    
+                    if st.button("➕ Inserir Elemento na Tela", type="primary"):
+                        if novo_nome_elem and novo_target_elem:
+                            nome_chave_clean = re.sub(r'[^\w\s]', '', novo_nome_elem).strip().lower().replace(" ", "_")
+                            if not nome_chave_clean:
+                                nome_chave_clean = "elemento_customizado"
+                                
+                            catalogo_gerencia[mod_gerencia][tela_gerencia][nome_chave_clean] = {
+                                "by": novo_by_elem,
+                                "target": novo_target_elem,
+                                "ativo": True,
+                                "nome_original": nome_chave_clean
+                            }
+                            salvar_json_local(ARQUIVO_CATALOGO, catalogo_gerencia)
+                            
+                            # Limpa o cache do data_editor para forçar atualização visual
+                            if key_editor in st.session_state:
+                                del st.session_state[key_editor]
+                                
+                            st.success(f"✅ Elemento '{nome_chave_clean}' adicionado com sucesso!")
+                            st.rerun()
+
+                st.divider()
+
+                # --- TABELA INTERATIVA COM CAMPO DE SELETOR EDITÁVEL ---
                 lista_dados = []
-                for k, v in dict_elementos.items():
+                chaves_originais_ordem = list(dict_elementos.keys())
+                
+                for k in chaves_originais_ordem:
+                    v = dict_elementos[k]
                     nome_orig = v.get("nome_original", k)
                     lista_dados.append({
                         "Identificador": k,
@@ -1148,61 +1532,120 @@ with tab4:
                 
                 df_elementos = pd.DataFrame(lista_dados)
                 
-                # Exibe a tabela interativa
                 df_editado = st.data_editor(
                     df_elementos,
                     column_config={
                         "Ativo": st.column_config.CheckboxColumn("Ativo", help="Desmarque para desativar/ocultar no editor"),
                         "Identificador": st.column_config.TextColumn("Identificador (Nome Customizado)"),
                         "Nome Original": st.column_config.TextColumn("Nome Original Mapeado", disabled=True),
-                        "Tipo": st.column_config.TextColumn("Tipo", disabled=True),
-                        "Alvo (Seletor)": st.column_config.TextColumn("Alvo (Seletor)", disabled=True),
+                        "Tipo": st.column_config.SelectboxColumn("Tipo", options=["xpath", "id", "css_selector"]),
+                        "Alvo (Seletor)": st.column_config.TextColumn("Alvo (Seletor/XPath Customizado)"),
                     },
-                    disabled=["Tipo", "Alvo (Seletor)", "Nome Original"],
+                    disabled=["Nome Original"],
                     hide_index=True,
                     width="stretch",
-                    key=f"editor_{mod_gerencia}_{tela_gerencia}"
+                    key=key_editor
                 )
                 
-                col_sav1, col_sav2 = st.columns(2)
+                col_sav1, col_sav2, col_sav3 = st.columns(3)
                 
                 with col_sav1:
                     if st.button("💾 Salvar Alterações na Tela", type="primary", width="stretch"):
                         novo_dict_tela = {}
-                        for _, row in df_editado.iterrows():
+                        
+                        for i, row in df_editado.iterrows():
                             nome_digitado = str(row["Identificador"]).strip()
                             nome_orig = str(row["Nome Original"]).strip()
+                            target_digitado = str(row["Alvo (Seletor)"]).strip()
+                            tipo_digitado = str(row["Tipo"]).strip()
                             
-                            # Se o usuário deixou o campo vazio, volta automaticamente para o Nome Original!
                             nome_final = nome_digitado if nome_digitado else nome_orig
                             
-                            novo_dict_tela[nome_final] = {
-                                "by": str(row["Tipo"]),
-                                "target": str(row["Alvo (Seletor)"]),
-                                "ativo": bool(row["Ativo"]),
-                                "nome_original": nome_orig
-                            }
+                            # Recupera todas as propriedades originais do elemento (opcoes, is_select, etc.)
+                            elem_dict_base = {}
+                            if i < len(chaves_originais_ordem):
+                                chave_antiga = chaves_originais_ordem[i]
+                                elem_dict_base = dict_elementos[chave_antiga].copy()
+                            
+                            # Atualiza com as modificações feitas pelo usuário na tabela
+                            elem_dict_base["by"] = tipo_digitado
+                            elem_dict_base["target"] = target_digitado
+                            elem_dict_base["ativo"] = bool(row["Ativo"])
+                            elem_dict_base["nome_original"] = nome_orig
+                            
+                            novo_dict_tela[nome_final] = elem_dict_base
                         
                         catalogo_gerencia[mod_gerencia][tela_gerencia] = novo_dict_tela
                         salvar_json_local(ARQUIVO_CATALOGO, catalogo_gerencia)
-                        st.success("✅ Alterações salvas com sucesso!")
+                        
+                        # Limpa o cache do data_editor no session_state para carregar os novos dados
+                        if key_editor in st.session_state:
+                            del st.session_state[key_editor]
+                            
+                        st.success("✅ Alterações salvas com sucesso no arquivo JSON!")
                         st.rerun()
 
                 with col_sav2:
-                    if st.button("🔄 Restaurar Todos para Nomes Originais", width="stretch"):
+                    if st.button("🔄 Restaurar Nomes Originais", width="stretch"):
+                        st.session_state[f"confirm_restore_{mod_gerencia}_{tela_gerencia}"] = True
+
+                with col_sav3:
+                    if st.button("🗑️ Apagar Sub-módulo (Tela)", width="stretch"):
+                        st.session_state[f"confirm_delete_tela_{mod_gerencia}_{tela_gerencia}"] = True
+
+                # Bloco de Confirmação para Restaurar Nomes
+                if st.session_state.get(f"confirm_restore_{mod_gerencia}_{tela_gerencia}"):
+                    st.warning("⚠️ **Confirmação:** Tem certeza que deseja restaurar TODOS os nomes desta tela para os padrões originais?")
+                    col_res_c1, col_res_c2 = st.columns(2)
+                    if col_res_c1.button("✅ Sim, Restaurar", type="primary", width="stretch", key=f"btn_res_sim_{mod_gerencia}_{tela_gerencia}"):
                         novo_dict_tela = {}
-                        for _, row in df_editado.iterrows():
+                        for i, row in df_editado.iterrows():
                             nome_orig = str(row["Nome Original"]).strip()
-                            novo_dict_tela[nome_orig] = {
-                                "by": str(row["Tipo"]),
-                                "target": str(row["Alvo (Seletor)"]),
-                                "ativo": bool(row["Ativo"]),
-                                "nome_original": nome_orig
-                            }
-                        
+                            elem_dict_base = {}
+                            if i < len(chaves_originais_ordem):
+                                chave_antiga = chaves_originais_ordem[i]
+                                elem_dict_base = dict_elementos[chave_antiga].copy()
+                                
+                            elem_dict_base["by"] = str(row["Tipo"])
+                            elem_dict_base["target"] = str(row["Alvo (Seletor)"])
+                            elem_dict_base["ativo"] = bool(row["Ativo"])
+                            elem_dict_base["nome_original"] = nome_orig
+                            
+                            novo_dict_tela[nome_orig] = elem_dict_base
+
                         catalogo_gerencia[mod_gerencia][tela_gerencia] = novo_dict_tela
                         salvar_json_local(ARQUIVO_CATALOGO, catalogo_gerencia)
-                        st.success("✅ Todos os nomes desta tela foram restaurados para o padrão original!")
+                        
+                        if key_editor in st.session_state:
+                            del st.session_state[key_editor]
+                            
+                        st.session_state[f"confirm_restore_{mod_gerencia}_{tela_gerencia}"] = False
+                        st.success("✅ Todos os nomes foram restaurados!")
+                        st.rerun()
+                    if col_res_c2.button("❌ Cancelar", width="stretch", key=f"btn_res_nao_{mod_gerencia}_{tela_gerencia}"):
+                        st.session_state[f"confirm_restore_{mod_gerencia}_{tela_gerencia}"] = False
+                        st.rerun()
+
+                # Bloco de Confirmação para Apagar Sub-módulo (Tela)
+                if st.session_state.get(f"confirm_delete_tela_{mod_gerencia}_{tela_gerencia}"):
+                    st.error(f"🚨 **ATENÇÃO:** Tem certeza que deseja EXCLUIR PERMANENTEMENTE o sub-módulo (tela) **'{tela_gerencia}'** do módulo **'{mod_gerencia}'**?")
+                    col_del_c1, col_del_c2 = st.columns(2)
+                    if col_del_c1.button("🔥 Sim, Apagar Sub-módulo", type="primary", width="stretch", key=f"btn_del_sim_{mod_gerencia}_{tela_gerencia}"):
+                        del catalogo_gerencia[mod_gerencia][tela_gerencia]
+                        # Remove o módulo pai apenas se ele não tiver mais nenhuma tela restante
+                        if not catalogo_gerencia[mod_gerencia]:
+                            del catalogo_gerencia[mod_gerencia]
+                            
+                        salvar_json_local(ARQUIVO_CATALOGO, catalogo_gerencia)
+                        
+                        if key_editor in st.session_state:
+                            del st.session_state[key_editor]
+                            
+                        st.session_state[f"confirm_delete_tela_{mod_gerencia}_{tela_gerencia}"] = False
+                        st.success(f"🗑️ Tela '{tela_gerencia}' apagada com sucesso!")
+                        st.rerun()
+                    if col_del_c2.button("❌ Cancelar", width="stretch", key=f"btn_del_nao_{mod_gerencia}_{tela_gerencia}"):
+                        st.session_state[f"confirm_delete_tela_{mod_gerencia}_{tela_gerencia}"] = False
                         st.rerun()
     else:
         st.info("O catálogo atual está vazio. Use a Aba 2 para mapear novos elementos.")
